@@ -10,15 +10,72 @@ from moviepy import VideoFileClip, AudioFileClip, ImageClip, TextClip, Composite
 import edge_tts
 
 # -------------------------------------------------------------
-# 1. EXTRACCIÓ DE CONTINGUT DE REDDIT
+# 1. EXTRACCIÓ DE CONTINGUT DE REDDIT (AMB GENERACIÓ IA DE RESERVA)
 # -------------------------------------------------------------
-def fetch_candidate_posts(total_needed=15):
+def generate_fallback_posts_with_gemini(api_key):
     """
-    Extreu publicacions candidates de subreddits de relats.
+    Si Reddit bloqueja la IP de GitHub Actions, Gemini genera 5 històries
+    virals realistes en format Reddit per garantir que el bot mai s'aturi.
     """
-    subreddits = ["AskReddit", "Stories", "AmItheAsshole"]
+    print("Reddit ha bloquejat la petició des del servidor. Generant històries virals amb Gemini AI...")
+    if not api_key:
+        return [{
+            "subreddit": "Stories",
+            "author": "story_teller",
+            "title": "The day I accidentally became the most wanted person in my high school",
+            "body": "It all started in chemistry class when my teacher told us never to mix two specific solutions. Long story short, I sneezed, dropped the beaker, and triggered the fire alarm for the whole district.",
+            "ups": 15400
+        }]
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    headers = {"Content-Type": "application/json"}
+    prompt = (
+        "Genera 5 històries realistes, boges, emotives o intrigants en anglès a l'estil de Reddit "
+        "(subreddits com r/tifu, r/confession, r/TrueOffMyChest). Han de tenir un ganxo fort inicial "
+        "i una extensió adequada per a un vídeo de 40-50 segons (aproximadament 100-140 paraules cadascuna).\n"
+        "Respon ÚNICAMENT amb un array JSON amb aquest format:\n"
+        "[\n"
+        "  {\n"
+        '    "subreddit": "tifu",\n'
+        '    "author": "usuari_inventat",\n'
+        '    "title": "Títol molt cridaner",\n'
+        '    "body": "El relat de la història en primera persona...",\n'
+        '    "ups": 18200\n'
+        "  }\n"
+        "]"
+    )
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.7, "response_mime_type": "application/json"}
+    }
+    
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=20)
+        if res.status_code == 200:
+            data = res.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            posts = json.loads(text)
+            print(f"Gemini ha generat {len(posts)} històries alternatives amb èxit.")
+            return posts
+    except Exception as e:
+        print(f"Error generant històries de reserva amb Gemini: {e}")
+
+    return [{
+        "subreddit": "Stories",
+        "author": "reddit_user",
+        "title": "I accidentally discovered a hidden room in my university library",
+        "body": "While looking for a quiet place to study during finals, I leaned against a bookshelf and felt it click. Behind it was a fully furnished room from the 1970s with books that aren't in the official catalog.",
+        "ups": 22100
+    }]
+
+def fetch_candidate_posts(api_key, total_needed=15):
+    """
+    Extreu publicacions de subreddits que tenen contingut narratiu real.
+    """
+    subreddits = ["tifu", "confession", "TrueOffMyChest", "Stories"]
     posts = []
-    headers = {"User-Agent": "script:viral_shorts_gemini:v1.0 (by /u/system_bot)"}
+    headers = {"User-Agent": "script:viral_shorts_generator:v2.0 (by /u/reddit_system)"}
     
     for sub in subreddits:
         url = f"https://www.reddit.com/r/{sub}/hot.json?limit=25"
@@ -33,22 +90,25 @@ def fetch_candidate_posts(total_needed=15):
                     author = p.get("author", "reddit_user")
                     ups = p.get("ups", 1000)
                     
-                    # Ignorem posts buits, fixats o excessivament llargs
-                    if not body or len(body) < 120 or p.get("stickied", False):
-                        continue
-                    
-                    posts.append({
-                        "subreddit": sub,
-                        "author": author,
-                        "title": title,
-                        "body": body,
-                        "ups": ups
-                    })
-                    if len(posts) >= total_needed:
-                        return posts
+                    # Filtrem històries amb prou text però sense ser massa llargues
+                    if len(body) >= 200 and not p.get("stickied", False):
+                        posts.append({
+                            "subreddit": sub,
+                            "author": author,
+                            "title": title,
+                            "body": body,
+                            "ups": ups
+                        })
+                        if len(posts) >= total_needed:
+                            return posts
+            else:
+                print(f"Reddit ha respost amb el codi {r.status_code} a r/{sub}")
         except Exception as e:
             print(f"Error connectant a r/{sub}: {e}")
             
+    if not posts:
+        return generate_fallback_posts_with_gemini(api_key)
+        
     return posts
 
 # -------------------------------------------------------------
@@ -58,10 +118,13 @@ def select_story_with_gemini(posts, api_key):
     """
     Pregunta a Gemini en blocs de 5 posts fins a un màxim de 3 vegades.
     """
+    if not posts:
+        posts = generate_fallback_posts_with_gemini(api_key)
+
     if not api_key:
-        print("Avís: No s'ha trobat GEMINI_API_KEY. Seleccionant el primer post per defecte.")
+        print("Avís: No s'ha trobat GEMINI_API_KEY. Seleccionant el primer post.")
         p = posts[0]
-        return p, f"{p['title']}. {p['body']}"
+        return p, f"{p['title']}. {p['body'][:500]}"
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
     headers = {"Content-Type": "application/json"}
@@ -79,7 +142,6 @@ def select_story_with_gemini(posts, api_key):
             
         print(f"\n--- Avaluant Ronda {round_idx + 1} de 5 publicacions amb Gemini ---")
         
-        # Preparem el resum de cada post per al prompt
         batch_descriptions = ""
         for i, p in enumerate(batch, 1):
             sample = p['body'][:300].replace('\n', ' ')
@@ -87,16 +149,17 @@ def select_story_with_gemini(posts, api_key):
             
         prompt = (
             "Ets un expert productor de contingut viral per a TikTok, Snapchat Spotlight i Reels.\n"
-            "Analitza aquestes 5 publicacions de Reddit. Necessitem una història que tingui un GANXO inicial fort, "
-            "sigui entretinguda, tingui un to intrigant o emocional, i sigui adequada per a un vídeo de 45-60 segons.\n"
+            "Analitza aquestes 5 publicacions de Reddit. Necessitem una història que tingui un GANXO inicial molt fort, "
+            "sigui intrigant o divertida, i tingui una durada ideal per a un vídeo de 40-55 segons (unes 110-140 paraules narrades).\n"
             f"{batch_descriptions}\n"
             "INSTRUCCIONS DE RESPOSTA:\n"
-            "- Si alguna opció és excel·lent, respon amb el número (1-5) i una versió polida del text en anglès llesta per ser narrada (eliminant 'TL;DR', 'AITA', enllaços i paraules complexes).\n"
-            "- Si CAP de les 5 opcions té prou qualitat o ganxo viral, respon amb 'selected': null.\n"
+            "- Si alguna opció és excel·lent, respon amb el número de l'opció (1-5) i una versió polida en anglès "
+            "llesta per ser narrada (eliminant acrònims com 'TL;DR', 'AITA', enllaços i fórmules com 'Edit:').\n"
+            "- Si CAP de les 5 té prou ritme viral, respon amb 'selected': null.\n"
             "Respon EXCLUSIVAMENT en format JSON vàlid:\n"
             "{\n"
-            '  "selected": 1, // o null si cap és bona\n'
-            '  "narration": "El text net per ser narrat per la veu en off..."\n'
+            '  "selected": 1,\n'
+            '  "narration": "El text net per ser narrat per la veu en off en anglès..."\n'
             "}"
         )
         
@@ -120,16 +183,15 @@ def select_story_with_gemini(posts, api_key):
                     print(f"Gemini ha escollit l'Opció {selected}: {chosen_post['title'][:50]}...")
                     return chosen_post, narration
                 else:
-                    print("Gemini ha determinat que cap d'aquestes 5 és prou bona. Provant el següent bloc...")
+                    print("Gemini considera que cap d'aquestes 5 és prou bona. Provant el següent bloc...")
             else:
                 print(f"Error resposta Gemini API: {res.text}")
         except Exception as e:
             print(f"Error connectant amb Gemini: {e}")
 
-    # Si després de 3 rondes cap el convenç, agafem el millor per vots
-    print("Cap història ha estat validada per Gemini. Agafant la més votada com a reserva.")
-    best = max(posts, key=lambda x: x["ups"])
-    return best, f"{best['title']}. {best['body'][:600]}"
+    print("Seleccionant la història més votada per defecte.")
+    best = max(posts, key=lambda x: x.get("ups", 0), default=posts[0])
+    return best, f"{best['title']}. {best['body'][:500]}"
 
 # -------------------------------------------------------------
 # 3. GENERACIÓ VISUAL DE LA TARGETA DE REDDIT (PANTALLA SUPERIOR)
@@ -142,13 +204,11 @@ def create_reddit_card_image(post, output_image="reddit_card.png"):
     img = Image.new("RGB", (width, height), color="#0e1113")
     draw = ImageDraw.Draw(img)
     
-    # Marc de la targeta
     card_margin_x, card_margin_y = 50, 60
     card_w, card_h = width - (card_margin_x * 2), height - (card_margin_y * 2)
     card_bg = "#1a1a1b"
     draw.rounded_rectangle([card_margin_x, card_margin_y, card_margin_x + card_w, card_margin_y + card_h], radius=25, fill=card_bg, outline="#343536", width=2)
     
-    # Fonts
     font_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     font_reg = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     
@@ -156,28 +216,29 @@ def create_reddit_card_image(post, output_image="reddit_card.png"):
     title_font = ImageFont.truetype(font_bold, 44)
     body_font = ImageFont.truetype(font_reg, 34)
     
-    # Capçalera (Icona + Nom Subreddit + Autor)
+    # Capçalera (Icona taronja + Subreddit + Autor)
     draw.ellipse([card_margin_x + 40, card_margin_y + 40, card_margin_x + 95, card_margin_y + 95], fill="#ff4500")
     draw.text((card_margin_x + 115, card_margin_y + 48), f"r/{post['subreddit']}", font=meta_font, fill="#d7dadc")
-    draw.text((card_margin_x + 360, card_margin_y + 48), f"• Posted by u/{post['author']}", font=meta_font, fill="#818384")
+    draw.text((card_margin_x + 380, card_margin_y + 48), f"• u/{post['author']}", font=meta_font, fill="#818384")
     
     # Títol
     wrapped_title = textwrap.wrap(post["title"], width=35)
     cur_y = card_margin_y + 130
-    for line in wrapped_title[:3]: # Màxim 3 línies de títol
+    for line in wrapped_title[:3]:
         draw.text((card_margin_x + 40, cur_y), line, font=title_font, fill="#ffffff")
         cur_y += 55
         
     cur_y += 20
     
-    # Cos del text (Fragment estilitzat)
+    # Cos del text
     wrapped_body = textwrap.wrap(post["body"][:400], width=45)
-    for line in wrapped_body[:7]: # Màxim 7 línies
+    for line in wrapped_body[:7]:
         draw.text((card_margin_x + 40, cur_y), line, font=body_font, fill="#d7dadc")
         cur_y += 44
         
-    # Peu amb vots i comentaris
-    ups_k = f"{post['ups'] / 1000:.1f}k" if post['ups'] > 1000 else str(post['ups'])
+    # Peu amb puntuació
+    ups = post.get("ups", 1200)
+    ups_k = f"{ups / 1000:.1f}k" if ups > 1000 else str(ups)
     footer_y = card_margin_y + card_h - 75
     draw.rounded_rectangle([card_margin_x + 40, footer_y, card_margin_x + 220, footer_y + 50], radius=15, fill="#272729")
     draw.text((card_margin_x + 60, footer_y + 10), f"▲  {ups_k}  ▼", font=meta_font, fill="#d7dadc")
@@ -220,7 +281,7 @@ async def generate_audio_and_timestamps(text, output_audio="audio.mp3"):
                 "end": (i + 1) * step
             })
 
-    print(f"Àudio enllestit. S'han detectat {len(words_data)} paraules.")
+    print(f"Àudio enllestit amb {len(words_data)} paraules sincronitzades.")
     return words_data
 
 # -------------------------------------------------------------
@@ -241,7 +302,7 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
     audio = AudioFileClip(audio_path)
     audio_duration = audio.duration
 
-    # 1. PANTALLA SUPERIOR: Targeta de Reddit (1080x960 a y=0)
+    # 1. Pantalla Superior (Targeta Reddit 1080x960)
     top_card = (
         ImageClip(card_img)
         .with_duration(audio_duration)
@@ -249,7 +310,7 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
         .with_position((0, 0))
     )
 
-    # 2. PANTALLA INFERIOR: Gameplay (1080x960 a y=960)
+    # 2. Pantalla Inferior (Gameplay 1080x960)
     gameplay_full = VideoFileClip(gameplay_path)
     if gameplay_full.duration > audio_duration:
         start_time = random.uniform(0, gameplay_full.duration - audio_duration - 1)
@@ -263,7 +324,7 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
         .with_position((0, 960))
     )
 
-    # 3. SUBTÍTOLS DINÀMICS: Sobre el gameplay (y=1400 aproximadament)
+    # 3. Subtítols centrats a la part inferior (y=1400)
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     subtitle_clips = []
     
@@ -283,13 +344,13 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
         )
         subtitle_clips.append(txt)
 
-    # Muntem el vídeo 1080x1920
+    # Composició completa 1080x1920
     final_video = CompositeVideoClip(
         clips=[top_card, bottom_gameplay] + subtitle_clips,
         size=(1080, 1920)
     ).with_duration(audio_duration).with_audio(audio)
 
-    print("Renderitzant el vídeo complet split-screen (1080x1920)...")
+    print("Renderitzant el vídeo final...")
     final_video.write_videofile(
         output_path,
         fps=30,
@@ -298,7 +359,7 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
         preset="ultrafast",
         threads=2
     )
-    print("Vídeo generat amb èxit!")
+    print("Procés finalitzat amb èxit!")
 
 # -------------------------------------------------------------
 # EXECUCIÓ PRINCIPAL
@@ -307,7 +368,7 @@ if __name__ == "__main__":
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     
     print("Recollint publicacions candidates de Reddit...")
-    posts = fetch_candidate_posts(total_needed=15)
+    posts = fetch_candidate_posts(gemini_key, total_needed=15)
     
     chosen_post, narration_text = select_story_with_gemini(posts, gemini_key)
     print(f"\nHistòria seleccionada:\n{narration_text[:120]}...\n")
