@@ -10,6 +10,38 @@ from moviepy import VideoFileClip, AudioFileClip, ImageClip, TextClip, Composite
 import edge_tts
 
 # -------------------------------------------------------------
+# MOTOR DE CONNEXIÓ AMB GEMINI AI (MULTI-MODEL RESILIENT)
+# -------------------------------------------------------------
+def call_gemini_api(prompt, api_key, temperature=0.2):
+    """
+    Crida a l'API de Gemini provant en ordre els models recomanats per Google.
+    Si un model està descatalogat (404), salta immediatament al següent.
+    """
+    models_to_try = ["gemini-3.6-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": temperature, "response_mime_type": "application/json"}
+    }
+    
+    for model in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=25)
+            if res.status_code == 200:
+                data = res.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            elif res.status_code == 404:
+                # El model està descatalogat per a aquest compte, provem el següent
+                continue
+            else:
+                print(f"Avís resposta Gemini ({model}): {res.status_code} - {res.text[:100]}")
+        except Exception as e:
+            print(f"Error connectant amb model {model}: {e}")
+            
+    return None
+
+# -------------------------------------------------------------
 # 1. EXTRACCIÓ DE CONTINGUT DE REDDIT (AMB GENERACIÓ IA DE RESERVA)
 # -------------------------------------------------------------
 def generate_fallback_posts_with_gemini(api_key):
@@ -18,17 +50,17 @@ def generate_fallback_posts_with_gemini(api_key):
     virals realistes en format Reddit per garantir que el bot mai s'aturi.
     """
     print("Reddit ha bloquejat la petició des del servidor. Generant històries virals amb Gemini AI...")
+    default_backup = [{
+        "subreddit": "Stories",
+        "author": "reddit_user",
+        "title": "I accidentally discovered a hidden room in my university library",
+        "body": "While looking for a quiet place to study during finals, I leaned against a bookshelf and felt it click. Behind it was a fully furnished room from the 1970s with books that aren't in the official catalog.",
+        "ups": 22100
+    }]
+    
     if not api_key:
-        return [{
-            "subreddit": "Stories",
-            "author": "story_teller",
-            "title": "The day I accidentally became the most wanted person in my high school",
-            "body": "It all started in chemistry class when my teacher told us never to mix two specific solutions. Long story short, I sneezed, dropped the beaker, and triggered the fire alarm for the whole district.",
-            "ups": 15400
-        }]
+        return default_backup
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json"}
     prompt = (
         "Genera 5 històries realistes, boges, emotives o intrigants en anglès a l'estil de Reddit "
         "(subreddits com r/tifu, r/confession, r/TrueOffMyChest). Han de tenir un ganxo fort inicial "
@@ -45,29 +77,16 @@ def generate_fallback_posts_with_gemini(api_key):
         "]"
     )
     
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.7, "response_mime_type": "application/json"}
-    }
-    
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=20)
-        if res.status_code == 200:
-            data = res.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            posts = json.loads(text)
+    response_text = call_gemini_api(prompt, api_key, temperature=0.7)
+    if response_text:
+        try:
+            posts = json.loads(response_text)
             print(f"Gemini ha generat {len(posts)} històries alternatives amb èxit.")
             return posts
-    except Exception as e:
-        print(f"Error generant històries de reserva amb Gemini: {e}")
+        except Exception as e:
+            print(f"Error parsejant JSON de Gemini: {e}")
 
-    return [{
-        "subreddit": "Stories",
-        "author": "reddit_user",
-        "title": "I accidentally discovered a hidden room in my university library",
-        "body": "While looking for a quiet place to study during finals, I leaned against a bookshelf and felt it click. Behind it was a fully furnished room from the 1970s with books that aren't in the official catalog.",
-        "ups": 22100
-    }]
+    return default_backup
 
 def fetch_candidate_posts(api_key, total_needed=15):
     """
@@ -90,7 +109,6 @@ def fetch_candidate_posts(api_key, total_needed=15):
                     author = p.get("author", "reddit_user")
                     ups = p.get("ups", 1000)
                     
-                    # Filtrem històries amb prou text però sense ser massa llargues
                     if len(body) >= 200 and not p.get("stickied", False):
                         posts.append({
                             "subreddit": sub,
@@ -126,9 +144,6 @@ def select_story_with_gemini(posts, api_key):
         p = posts[0]
         return p, f"{p['title']}. {p['body'][:500]}"
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    headers = {"Content-Type": "application/json"}
-    
     batch_size = 5
     max_rounds = 3
     
@@ -163,18 +178,10 @@ def select_story_with_gemini(posts, api_key):
             "}"
         )
         
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.2, "response_mime_type": "application/json"}
-        }
-        
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=20)
-            if res.status_code == 200:
-                data = res.json()
-                text_response = data["candidates"][0]["content"]["parts"][0]["text"]
-                parsed = json.loads(text_response)
-                
+        response_text = call_gemini_api(prompt, api_key, temperature=0.2)
+        if response_text:
+            try:
+                parsed = json.loads(response_text)
                 selected = parsed.get("selected")
                 narration = parsed.get("narration", "")
                 
@@ -184,10 +191,8 @@ def select_story_with_gemini(posts, api_key):
                     return chosen_post, narration
                 else:
                     print("Gemini considera que cap d'aquestes 5 és prou bona. Provant el següent bloc...")
-            else:
-                print(f"Error resposta Gemini API: {res.text}")
-        except Exception as e:
-            print(f"Error connectant amb Gemini: {e}")
+            except Exception as e:
+                print(f"Error interpretant resposta JSON: {e}")
 
     print("Seleccionant la història més votada per defecte.")
     best = max(posts, key=lambda x: x.get("ups", 0), default=posts[0])
