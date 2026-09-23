@@ -7,52 +7,55 @@ import edge_tts
 
 def get_reddit_story():
     """
-    Extreu de forma pública i gratuïta la millor història del dia d'AskReddit.
+    Extreu històries virals de Reddit (AskReddit o AmItheAsshole).
+    Utilitza una capçalera tipus aplicació per evitar el filtre de bots de Reddit.
     """
-    url = "https://www.reddit.com/r/AskReddit/top.json?t=day&limit=25"
+    subreddits = ["AskReddit", "AmItheAsshole"]
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0"
+        "User-Agent": "script:viral_content_maker:v1.0 (by /u/system_bot)"
     }
     
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            posts = data.get("data", {}).get("children", [])
-            
-            for post in posts:
-                post_data = post.get("data", {})
-                title = post_data.get("title", "")
-                selftext = post_data.get("selftext", "")
+    for sub in subreddits:
+        url = f"https://www.reddit.com/r/{sub}/top.json?t=day&limit=25"
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                posts = data.get("data", {}).get("children", [])
                 
-                full_text = f"{title}. {selftext}".strip()
-                clean_text = " ".join(full_text.split())
-                
-                # Filtrem per a una durada òptima (entre 200 i 500 caràcters, uns 35-50 segons)
-                if 200 <= len(clean_text) <= 500:
-                    print(f"Història trobada a AskReddit: {clean_text[:60]}...")
-                    return clean_text
-    except Exception as e:
-        print(f"Error connectant a Reddit: {e}")
+                for post in posts:
+                    post_data = post.get("data", {})
+                    title = post_data.get("title", "")
+                    selftext = post_data.get("selftext", "")
+                    
+                    full_text = f"{title}. {selftext}".strip()
+                    clean_text = " ".join(full_text.split())
+                    
+                    # Ideal per a vídeos d'entre 35 i 50 segons
+                    if 200 <= len(clean_text) <= 500:
+                        print(f"Història trobada a r/{sub}: {clean_text[:60]}...")
+                        return clean_text
+        except Exception as e:
+            print(f"No s'ha pogut obtenir de r/{sub}: {e}")
 
     print("Utilitzant història alternativa per defecte.")
     return "What is a fact so ridiculous that it sounds completely fake, but is actually one hundred percent true?"
 
 async def generate_audio_and_timestamps(text, output_audio="audio.mp3"):
     """
-    Genera l'àudio amb edge-tts i captura els temps paraula per paraula en temps real.
+    Genera l'àudio amb edge-tts i n'extreu la posició de cada paraula en nanosegons.
     """
     voice = "en-US-ChristopherNeural"
     communicate = edge_tts.Communicate(text, voice)
     words_data = []
 
-    print("Generant àudio i timestamps amb Edge-TTS...")
+    print("Generant veu neuronal i timestamps amb Edge-TTS...")
     with open(output_audio, "wb") as f:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 f.write(chunk["data"])
             elif chunk["type"] == "WordBoundary":
-                # L'offset i duration de Microsoft venen expressats en unitats de 100 nanosegons (1s = 10.000.000 unitats)
+                # L'offset i la durada de Microsoft s'expressen en unitats de 100ns (1s = 10.000.000 unitats)
                 start = chunk["offset"] / 10_000_000
                 duration = chunk["duration"] / 10_000_000
                 word = chunk["text"].strip().upper()
@@ -63,17 +66,17 @@ async def generate_audio_and_timestamps(text, output_audio="audio.mp3"):
                         "end": start + duration
                     })
 
-    print(f"Àudio generat amb {len(words_data)} paraules sincronitzades.")
+    print(f"Àudio generat amb èxit. S'han detectat {len(words_data)} paraules.")
     return words_data
 
 def build_video(words, gameplay_path="gameplay.mp4", audio_path="audio.mp3", output_path="final_video.mp4"):
     """
-    Munta el vídeo vertical 9:16 sincronitzant àudio, fons de gameplay i subtítols centrats.
+    Munta el vídeo en format 9:16 (1080x1920) sincronitzant àudio, fons i text.
     """
     if not os.path.exists(gameplay_path):
         raise FileNotFoundError(
-            f"No s'ha trobat '{gameplay_path}'. Has de pujar un vídeo vertical anomenat "
-            f"'{gameplay_path}' a l'arrel del teu repositori."
+            f"Falta el fitxer '{gameplay_path}'. Puja un vídeo vertical de gameplay "
+            f"anomenat exactament '{gameplay_path}' al teu repositori."
         )
 
     audio = AudioFileClip(audio_path)
@@ -81,14 +84,13 @@ def build_video(words, gameplay_path="gameplay.mp4", audio_path="audio.mp3", out
     
     video = VideoFileClip(gameplay_path)
     
-    # Si el gameplay dura més que l'àudio, n'agafem un tros aleatori
+    # Retallem un fragment aleatori del gameplay si aquest dura més que l'àudio
     if video.duration > audio_duration:
         start_time = random.uniform(0, video.duration - audio_duration - 1)
         background = video.subclipped(start_time, start_time + audio_duration)
     else:
         background = video.subclipped(0, audio_duration)
         
-    # Assegurem la resolució de format curt vertical (1080x1920)
     background = background.resized(new_size=(1080, 1920))
     background = background.with_audio(audio)
     
@@ -122,7 +124,7 @@ def build_video(words, gameplay_path="gameplay.mp4", audio_path="audio.mp3", out
         preset="ultrafast",
         threads=2
     )
-    print("Vídeo renderitzat correctament!")
+    print("Procés finalitzat! El vídeo s'ha generat correctament.")
 
 if __name__ == "__main__":
     story_text = get_reddit_story()
