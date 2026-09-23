@@ -1,19 +1,19 @@
 name: Generate Viral Short
 
 on:
-  workflow_dispatch: # Botó manual per provar-ho quan vulguis
+  workflow_dispatch: # Botó manual des de GitHub Actions
   schedule:
-    - cron: '0 12 * * *' # Execució automàtica diària a les 12:00 UTC
+    - cron: '0 12 * * *' # Execució diària automàtica
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Descarregar el codi
+      - name: Descarregar repositori
         uses: actions/checkout@v4
 
-      - name: Configurar entorn Python
+      - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg imagemagick fonts-dejavu
-          # Desbloquejar ImageMagick per permetre la renderització de text
+          # Permetem a ImageMagick generar text sense restriccions de seguretat
           sudo sed -i 's/<policy domain="path" rights="none" pattern="@\*"/<policy domain="path" rights="read|write" pattern="@\*"/' /etc/ImageMagick-6/policy.xml || true
 
       - name: Instal·lar dependències de Python
@@ -34,7 +34,7 @@ jobs:
         run: |
           python main.py
 
-      - name: Descarregar fitxer final (Artifact)
+      - name: Guardar vídeo com a Artifact descarregable
         uses: actions/upload-artifact@v4
         with:
           name: short-video
