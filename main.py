@@ -2,14 +2,12 @@ import os
 import random
 import asyncio
 import requests
-import whisper
-import edge_tts
 from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip
+import edge_tts
 
 def get_reddit_story():
     """
-    Extreu de forma pública i gratuïta (sense API keys) la millor
-    història del dia d'AskReddit.
+    Extreu de forma pública i gratuïta la millor història del dia d'AskReddit.
     """
     url = "https://www.reddit.com/r/AskReddit/top.json?t=day&limit=25"
     headers = {
@@ -27,11 +25,10 @@ def get_reddit_story():
                 title = post_data.get("title", "")
                 selftext = post_data.get("selftext", "")
                 
-                # Unim títol i text eliminant salts de línia sobrants
                 full_text = f"{title}. {selftext}".strip()
                 clean_text = " ".join(full_text.split())
                 
-                # Filtrem per a una durada ideal en vídeo curt (uns 35-50 segons)
+                # Filtrem per a una durada òptima (entre 200 i 500 caràcters, uns 35-50 segons)
                 if 200 <= len(clean_text) <= 500:
                     print(f"Història trobada a AskReddit: {clean_text[:60]}...")
                     return clean_text
@@ -41,63 +38,68 @@ def get_reddit_story():
     print("Utilitzant història alternativa per defecte.")
     return "What is a fact so ridiculous that it sounds completely fake, but is actually one hundred percent true?"
 
-async def generate_audio(text, output_audio="audio.mp3"):
+async def generate_audio_and_timestamps(text, output_audio="audio.mp3"):
     """
-    Genera la veu en off amb edge-tts de Microsoft de forma gratuïta.
+    Genera l'àudio amb edge-tts i captura els temps paraula per paraula en temps real.
     """
     voice = "en-US-ChristopherNeural"
     communicate = edge_tts.Communicate(text, voice)
-    await communicate.save(output_audio)
-    print("Àudio generat correctament.")
-
-def get_word_timestamps(audio_path):
-    """
-    Analitza l'àudio amb el model Whisper per obtenir
-    el minutatge exacte de cada paraula.
-    """
-    print("Transcribint àudio amb Whisper...")
-    model = whisper.load_model("base")
-    result = model.transcribe(audio_path, word_timestamps=True)
-    
     words_data = []
-    for segment in result["segments"]:
-        for word in segment["words"]:
-            words_data.append({
-                "word": word["word"].strip().upper(),
-                "start": word["start"],
-                "end": word["end"]
-            })
+
+    print("Generant àudio i timestamps amb Edge-TTS...")
+    with open(output_audio, "wb") as f:
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                f.write(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                # L'offset i duration de Microsoft venen expressats en unitats de 100 nanosegons (1s = 10.000.000 unitats)
+                start = chunk["offset"] / 10_000_000
+                duration = chunk["duration"] / 10_000_000
+                word = chunk["text"].strip().upper()
+                if word:
+                    words_data.append({
+                        "word": word,
+                        "start": start,
+                        "end": start + duration
+                    })
+
+    print(f"Àudio generat amb {len(words_data)} paraules sincronitzades.")
     return words_data
 
-def build_video(gameplay_path="gameplay.mp4", audio_path="audio.mp3", output_path="final_video.mp4"):
+def build_video(words, gameplay_path="gameplay.mp4", audio_path="audio.mp3", output_path="final_video.mp4"):
     """
-    Munta el vídeo vertical 9:16 sincronitzant àudio, fons i subtítols.
+    Munta el vídeo vertical 9:16 sincronitzant àudio, fons de gameplay i subtítols centrats.
     """
+    if not os.path.exists(gameplay_path):
+        raise FileNotFoundError(
+            f"No s'ha trobat '{gameplay_path}'. Has de pujar un vídeo vertical anomenat "
+            f"'{gameplay_path}' a l'arrel del teu repositori."
+        )
+
     audio = AudioFileClip(audio_path)
     audio_duration = audio.duration
     
     video = VideoFileClip(gameplay_path)
     
-    # Agafem un segment aleatori del gameplay que coincideixi amb la durada de l'àudio
+    # Si el gameplay dura més que l'àudio, n'agafem un tros aleatori
     if video.duration > audio_duration:
         start_time = random.uniform(0, video.duration - audio_duration - 1)
         background = video.subclipped(start_time, start_time + audio_duration)
     else:
         background = video.subclipped(0, audio_duration)
         
-    # Assegurem la resolució vertical de 1080x1920
+    # Assegurem la resolució de format curt vertical (1080x1920)
     background = background.resized(new_size=(1080, 1920))
     background = background.with_audio(audio)
     
-    words = get_word_timestamps(audio_path)
     subtitle_clips = []
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     
-    # Creació dels subtítols centrats en majúscules
     for item in words:
         txt_clip = (
             TextClip(
                 text=item["word"],
-                font="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                font=font_path,
                 font_size=80,
                 color="yellow",
                 stroke_color="black",
@@ -120,9 +122,9 @@ def build_video(gameplay_path="gameplay.mp4", audio_path="audio.mp3", output_pat
         preset="ultrafast",
         threads=2
     )
-    print("Vídeo generat amb èxit!")
+    print("Vídeo renderitzat correctament!")
 
 if __name__ == "__main__":
-    story = get_reddit_story()
-    asyncio.run(generate_audio(story, "audio.mp3"))
-    build_video()
+    story_text = get_reddit_story()
+    words = asyncio.run(generate_audio_and_timestamps(story_text, "audio.mp3"))
+    build_video(words)
