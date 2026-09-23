@@ -1,49 +1,60 @@
 import os
 import random
 import asyncio
-import praw
+import requests
 import whisper
 import edge_tts
 from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip
 
-# 1. CONFIGURACIÓ DE REDDIT
 def get_reddit_story():
-    reddit = praw.Reddit(
-        client_id=os.getenv("REDDIT_CLIENT_ID"),
-        client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
-        user_agent="script:viral_shorts_bot:v1.0 (by /u/reddit_username)"
-    )
+    """
+    Extreu de forma pública i gratuïta (sense API keys) la millor
+    història del dia d'AskReddit.
+    """
+    url = "https://www.reddit.com/r/AskReddit/top.json?t=day&limit=25"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0"
+    }
     
-    subreddit = reddit.subreddit("AskReddit")
-    # Busquem els millors posts del dia
-    for submission in subreddit.top(time_filter="day", limit=20):
-        # Filtrem posts de text de mida ideal per a un vídeo de 40-60 segons (entre 300 i 600 caràcters)
-        text = f"{submission.title}. {submission.selftext}".strip()
-        # Si no té cos de text, busquem el primer comentari més votat
-        if len(submission.selftext) < 50:
-            submission.comments.replace_more(limit=0)
-            best_comments = [c.body for c in submission.comments if len(c.body) > 100]
-            if best_comments:
-                text = f"{submission.title}. {best_comments[0]}"
-                
-        # Neteja de caràcters estranys o links
-        clean_text = " ".join(text.split())
-        if 200 <= len(clean_text) <= 500:
-            print(f"Història seleccionada: {clean_text[:60]}...")
-            return clean_text
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            posts = data.get("data", {}).get("children", [])
             
-    # Text de seguretat per si falla Reddit
+            for post in posts:
+                post_data = post.get("data", {})
+                title = post_data.get("title", "")
+                selftext = post_data.get("selftext", "")
+                
+                # Unim títol i text eliminant salts de línia sobrants
+                full_text = f"{title}. {selftext}".strip()
+                clean_text = " ".join(full_text.split())
+                
+                # Filtrem per a una durada ideal en vídeo curt (uns 35-50 segons)
+                if 200 <= len(clean_text) <= 500:
+                    print(f"Història trobada a AskReddit: {clean_text[:60]}...")
+                    return clean_text
+    except Exception as e:
+        print(f"Error connectant a Reddit: {e}")
+
+    print("Utilitzant història alternativa per defecte.")
     return "What is a fact so ridiculous that it sounds completely fake, but is actually one hundred percent true?"
 
-# 2. GENERACIÓ DE VEU (TTS)
 async def generate_audio(text, output_audio="audio.mp3"):
+    """
+    Genera la veu en off amb edge-tts de Microsoft de forma gratuïta.
+    """
     voice = "en-US-ChristopherNeural"
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(output_audio)
-    print("Àudio generat amb èxit.")
+    print("Àudio generat correctament.")
 
-# 3. TRANSCRIURE I EXTREURE SUBTÍTOLS (WHISPER)
 def get_word_timestamps(audio_path):
+    """
+    Analitza l'àudio amb el model Whisper per obtenir
+    el minutatge exacte de cada paraula.
+    """
     print("Transcribint àudio amb Whisper...")
     model = whisper.load_model("base")
     result = model.transcribe(audio_path, word_timestamps=True)
@@ -58,30 +69,31 @@ def get_word_timestamps(audio_path):
             })
     return words_data
 
-# 4. EDICIÓ DEL VÍDEO
 def build_video(gameplay_path="gameplay.mp4", audio_path="audio.mp3", output_path="final_video.mp4"):
+    """
+    Munta el vídeo vertical 9:16 sincronitzant àudio, fons i subtítols.
+    """
     audio = AudioFileClip(audio_path)
     audio_duration = audio.duration
     
     video = VideoFileClip(gameplay_path)
     
-    # Si el gameplay és més llarg, agafem un tros aleatori
+    # Agafem un segment aleatori del gameplay que coincideixi amb la durada de l'àudio
     if video.duration > audio_duration:
         start_time = random.uniform(0, video.duration - audio_duration - 1)
         background = video.subclipped(start_time, start_time + audio_duration)
     else:
         background = video.subclipped(0, audio_duration)
         
-    # Assegurem la resolució vertical 9:16 (1080x1920)
+    # Assegurem la resolució vertical de 1080x1920
     background = background.resized(new_size=(1080, 1920))
     background = background.with_audio(audio)
     
-    # Generem els subtítols
     words = get_word_timestamps(audio_path)
     subtitle_clips = []
     
+    # Creació dels subtítols centrats en majúscules
     for item in words:
-        # Creació de TextClip compatible amb MoviePy v2
         txt_clip = (
             TextClip(
                 text=item["word"],
@@ -97,7 +109,6 @@ def build_video(gameplay_path="gameplay.mp4", audio_path="audio.mp3", output_pat
         )
         subtitle_clips.append(txt_clip)
         
-    # Muntatge final
     final_video = CompositeVideoClip([background] + subtitle_clips)
     
     print("Renderitzant el vídeo final...")
@@ -109,7 +120,7 @@ def build_video(gameplay_path="gameplay.mp4", audio_path="audio.mp3", output_pat
         preset="ultrafast",
         threads=2
     )
-    print("Vídeo llest!")
+    print("Vídeo generat amb èxit!")
 
 if __name__ == "__main__":
     story = get_reddit_story()
