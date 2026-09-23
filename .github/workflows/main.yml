@@ -1,43 +1,40 @@
 name: Generate Viral Short
 
 on:
-  workflow_dispatch: # Permet executar el bot manualment amb un sol clic des de GitHub
+  workflow_dispatch: # Botó manual per provar-ho quan vulguis
   schedule:
-    - cron: '0 12 * * *' # S'executa automàticament cada dia a les 12:00 UTC
+    - cron: '0 12 * * *' # Execució automàtica diària a les 12:00 UTC
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout del repositori
+      - name: Descarregar el codi
         uses: actions/checkout@v4
 
-      - name: Configurar Python
+      - name: Configurar entorn Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Instal·lar dependències del sistema
+      - name: Instal·lar eines del sistema
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg imagemagick fonts-dejavu
-          # Desbloquegem la política de seguretat d'ImageMagick per permetre escriure text en vídeos
+          # Desbloquejar ImageMagick per permetre la renderització de text
           sudo sed -i 's/<policy domain="path" rights="none" pattern="@\*"/<policy domain="path" rights="read|write" pattern="@\*"/' /etc/ImageMagick-6/policy.xml || true
 
-      - name: Instal·lar llibreries Python
+      - name: Instal·lar dependències de Python
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Executar el generador
-        env:
-          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
-          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+      - name: Executar generador de vídeo
         run: |
           python main.py
 
-      - name: Pujar el vídeo final com a descàrrega
+      - name: Descarregar fitxer final (Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: short-video
