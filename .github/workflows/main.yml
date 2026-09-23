@@ -1,9 +1,9 @@
 name: Generate Viral Short
 
 on:
-  workflow_dispatch: # Botó manual des de GitHub Actions
+  workflow_dispatch: # Permet activar l'execució manualment des de GitHub
   schedule:
-    - cron: '0 12 * * *' # Execució diària automàtica
+    - cron: '0 12 * * *' # Execució automàtica cada dia a les 12:00 UTC
 
 jobs:
   build:
@@ -13,7 +13,7 @@ jobs:
       - name: Descarregar repositori
         uses: actions/checkout@v4
 
-      - name: Configurar Python
+      - name: Configurar entorn Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg imagemagick fonts-dejavu
-          # Permetem a ImageMagick generar text sense restriccions de seguretat
+          # Habilitem ImageMagick per escriure text sense restriccions
           sudo sed -i 's/<policy domain="path" rights="none" pattern="@\*"/<policy domain="path" rights="read|write" pattern="@\*"/' /etc/ImageMagick-6/policy.xml || true
 
       - name: Instal·lar dependències de Python
