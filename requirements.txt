@@ -1,4 +1,4 @@
-praw==7.7.1
+requests==2.31.0
 edge-tts==6.1.12
 openai-whisper==20231117
 moviepy==2.1.1
