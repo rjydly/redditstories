@@ -14,8 +14,7 @@ import edge_tts
 # -------------------------------------------------------------
 def call_gemini_api(prompt, api_key, temperature=0.2):
     """
-    Crida a l'API de Gemini provant en ordre els models recomanats per Google.
-    Si un model està descatalogat (404), salta immediatament al següent.
+    Crida a l'API de Gemini provant models actius en cascada.
     """
     models_to_try = ["gemini-3.6-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
     headers = {"Content-Type": "application/json"}
@@ -32,47 +31,39 @@ def call_gemini_api(prompt, api_key, temperature=0.2):
                 data = res.json()
                 return data["candidates"][0]["content"]["parts"][0]["text"]
             elif res.status_code == 404:
-                # El model està descatalogat per a aquest compte, provem el següent
                 continue
             else:
-                print(f"Avís resposta Gemini ({model}): {res.status_code} - {res.text[:100]}")
+                print(f"Avís resposta Gemini ({model}): {res.status_code}")
         except Exception as e:
             print(f"Error connectant amb model {model}: {e}")
             
     return None
 
 # -------------------------------------------------------------
-# 1. EXTRACCIÓ DE CONTINGUT DE REDDIT (AMB GENERACIÓ IA DE RESERVA)
+# 1. EXTRACCIÓ DE CONTINGUT (MIRALLS REDLIB + MOTOR GENERATIU GEMINI)
 # -------------------------------------------------------------
-def generate_fallback_posts_with_gemini(api_key):
+def generate_stories_with_gemini(api_key):
     """
-    Si Reddit bloqueja la IP de GitHub Actions, Gemini genera 5 històries
-    virals realistes en format Reddit per garantir que el bot mai s'aturi.
+    Genera 5 històries hiperrealistes amb l'estil i format de Reddit.
+    Garanteix 0 bloquejos i evita contingut duplicat a xarxes socials.
     """
-    print("Reddit ha bloquejat la petició des del servidor. Generant històries virals amb Gemini AI...")
-    default_backup = [{
-        "subreddit": "Stories",
-        "author": "reddit_user",
-        "title": "I accidentally discovered a hidden room in my university library",
-        "body": "While looking for a quiet place to study during finals, I leaned against a bookshelf and felt it click. Behind it was a fully furnished room from the 1970s with books that aren't in the official catalog.",
-        "ups": 22100
-    }]
+    print("Activant motor de generació viral amb Gemini AI...")
     
-    if not api_key:
-        return default_backup
-
     prompt = (
-        "Genera 5 històries realistes, boges, emotives o intrigants en anglès a l'estil de Reddit "
-        "(subreddits com r/tifu, r/confession, r/TrueOffMyChest). Han de tenir un ganxo fort inicial "
-        "i una extensió adequada per a un vídeo de 40-50 segons (aproximadament 100-140 paraules cadascuna).\n"
-        "Respon ÚNICAMENT amb un array JSON amb aquest format:\n"
+        "Ets un guionista expert en crear vídeos virals per a TikTok, Shorts i Reels a partir d'històries d'estil Reddit.\n"
+        "Genera 5 històries fictícies però totalment creïbles, boges, intrigants o divertides, com si fossin publicacions de "
+        "subreddits com r/tifu, r/confession o r/TrueOffMyChest.\n"
+        "REQUISITS:\n"
+        "- Cada història ha de començar amb una primera frase molt potent (ganxo viral).\n"
+        "- Longitud ideal per a 40-50 segons de veu en off (entre 110 i 140 paraules en anglès).\n"
+        "- Retorna ÚNICAMENT un array JSON vàlid amb aquest format:\n"
         "[\n"
         "  {\n"
         '    "subreddit": "tifu",\n'
         '    "author": "usuari_inventat",\n'
-        '    "title": "Títol molt cridaner",\n'
-        '    "body": "El relat de la història en primera persona...",\n'
-        '    "ups": 18200\n'
+        '    "title": "Títol molt atractiu",\n'
+        '    "body": "El text complet de la història en primera persona...",\n'
+        '    "ups": 19400\n'
         "  }\n"
         "]"
     )
@@ -81,66 +72,77 @@ def generate_fallback_posts_with_gemini(api_key):
     if response_text:
         try:
             posts = json.loads(response_text)
-            print(f"Gemini ha generat {len(posts)} històries alternatives amb èxit.")
+            print(f"S'han obtingut {len(posts)} històries inèdites amb èxit.")
             return posts
         except Exception as e:
-            print(f"Error parsejant JSON de Gemini: {e}")
+            print(f"Error processant JSON de Gemini: {e}")
 
-    return default_backup
+    # Reserva local en cas d'absència de clau o xarxa
+    return [{
+        "subreddit": "tifu",
+        "author": "mystery_student",
+        "title": "I accidentally convinced my entire university that our library was haunted",
+        "body": "It all started when I left my Bluetooth speaker hidden on top of an old bookshelf during exam week. I started playing faint whisper tracks whenever someone sat nearby, and within forty-eight hours, the local news showed up.",
+        "ups": 24500
+    }]
 
 def fetch_candidate_posts(api_key, total_needed=15):
     """
-    Extreu publicacions de subreddits que tenen contingut narratiu real.
+    Intenta obtenir publicacions a través d'instàncies mirall de Reddit (sense bloquejos d'IP).
+    Si no responen, activa el motor generatiu de Gemini.
     """
-    subreddits = ["tifu", "confession", "TrueOffMyChest", "Stories"]
     posts = []
-    headers = {"User-Agent": "script:viral_shorts_generator:v2.0 (by /u/reddit_system)"}
-    
-    for sub in subreddits:
-        url = f"https://www.reddit.com/r/{sub}/hot.json?limit=25"
-        try:
-            r = requests.get(url, headers=headers, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                for item in data.get("data", {}).get("children", []):
-                    p = item.get("data", {})
-                    title = p.get("title", "").strip()
-                    body = p.get("selftext", "").strip()
-                    author = p.get("author", "reddit_user")
-                    ups = p.get("ups", 1000)
-                    
-                    if len(body) >= 200 and not p.get("stickied", False):
-                        posts.append({
-                            "subreddit": sub,
-                            "author": author,
-                            "title": title,
-                            "body": body,
-                            "ups": ups
-                        })
-                        if len(posts) >= total_needed:
-                            return posts
-            else:
-                print(f"Reddit ha respost amb el codi {r.status_code} a r/{sub}")
-        except Exception as e:
-            print(f"Error connectant a r/{sub}: {e}")
-            
-    if not posts:
-        return generate_fallback_posts_with_gemini(api_key)
-        
-    return posts
+    # Instàncies mirall públiques que no bloquegen GitHub Actions
+    mirrors = ["https://safereddit.com", "https://redlib.tux.pizza"]
+    subreddits = ["tifu", "confession", "TrueOffMyChest"]
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    print("Intentant connexió amb instàncies mirall de Reddit...")
+    for mirror in mirrors:
+        if len(posts) >= total_needed:
+            break
+        for sub in subreddits:
+            url = f"{mirror}/r/{sub}/hot.json?limit=15"
+            try:
+                r = requests.get(url, headers=headers, timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    for item in data.get("data", {}).get("children", []):
+                        p = item.get("data", {})
+                        title = p.get("title", "").strip()
+                        body = p.get("selftext", "").strip()
+                        author = p.get("author", "reddit_user")
+                        ups = p.get("ups", 1000)
+
+                        if len(body) >= 200 and not p.get("stickied", False):
+                            posts.append({
+                                "subreddit": sub,
+                                "author": author,
+                                "title": title,
+                                "body": body,
+                                "ups": ups
+                            })
+                            if len(posts) >= total_needed:
+                                return posts
+            except Exception:
+                continue
+
+    # Si les instàncies mirall no estan disponibles, fem servir Gemini
+    print("Servidors externs inaccessibles. Fent servir el generador d'històries amb IA...")
+    return generate_stories_with_gemini(api_key)
 
 # -------------------------------------------------------------
 # 2. FILTRATGE AMB GEMINI AI (3 RONDES DE 5 POSTS)
 # -------------------------------------------------------------
 def select_story_with_gemini(posts, api_key):
     """
-    Pregunta a Gemini en blocs de 5 posts fins a un màxim de 3 vegades.
+    Avalua les històries en blocs de 5 fins a un màxim de 3 rondes.
     """
     if not posts:
-        posts = generate_fallback_posts_with_gemini(api_key)
+        posts = generate_stories_with_gemini(api_key)
 
     if not api_key:
-        print("Avís: No s'ha trobat GEMINI_API_KEY. Seleccionant el primer post.")
+        print("Avís: Sense GEMINI_API_KEY. Seleccionant la primera història.")
         p = posts[0]
         return p, f"{p['title']}. {p['body'][:500]}"
 
@@ -156,25 +158,23 @@ def select_story_with_gemini(posts, api_key):
             break
             
         print(f"\n--- Avaluant Ronda {round_idx + 1} de 5 publicacions amb Gemini ---")
-        
         batch_descriptions = ""
         for i, p in enumerate(batch, 1):
             sample = p['body'][:300].replace('\n', ' ')
             batch_descriptions += f"\n[OPCIÓ {i}]\nTítol: {p['title']}\nInici: {sample}...\n"
             
         prompt = (
-            "Ets un expert productor de contingut viral per a TikTok, Snapchat Spotlight i Reels.\n"
-            "Analitza aquestes 5 publicacions de Reddit. Necessitem una història que tingui un GANXO inicial molt fort, "
-            "sigui intrigant o divertida, i tingui una durada ideal per a un vídeo de 40-55 segons (unes 110-140 paraules narrades).\n"
+            "Ets un expert en creació de contingut viral per a format curt (Reels, Shorts, Spotlight).\n"
+            "Analitza aquestes 5 publicacions. Necessitem una història amb un GANXO inicial fort, "
+            "ritme dinàmic i durada d'uns 40-50 segons (110-140 paraules en anglès).\n"
             f"{batch_descriptions}\n"
-            "INSTRUCCIONS DE RESPOSTA:\n"
-            "- Si alguna opció és excel·lent, respon amb el número de l'opció (1-5) i una versió polida en anglès "
-            "llesta per ser narrada (eliminant acrònims com 'TL;DR', 'AITA', enllaços i fórmules com 'Edit:').\n"
-            "- Si CAP de les 5 té prou ritme viral, respon amb 'selected': null.\n"
-            "Respon EXCLUSIVAMENT en format JSON vàlid:\n"
+            "INSTRUCCIONS:\n"
+            "- Si alguna és adequada, respon amb el seu índex (1-5) i el text polit en anglès per a la narració (sense 'TL;DR' ni links).\n"
+            "- Si cap és prou bona, respon amb 'selected': null.\n"
+            "Format JSON estricte:\n"
             "{\n"
             '  "selected": 1,\n'
-            '  "narration": "El text net per ser narrat per la veu en off en anglès..."\n'
+            '  "narration": "Text net en anglès per ser narrat..."\n'
             "}"
         )
         
@@ -187,14 +187,14 @@ def select_story_with_gemini(posts, api_key):
                 
                 if selected and isinstance(selected, int) and 1 <= selected <= len(batch):
                     chosen_post = batch[selected - 1]
-                    print(f"Gemini ha escollit l'Opció {selected}: {chosen_post['title'][:50]}...")
+                    print(f"Gemini ha seleccionat l'Opció {selected}: {chosen_post['title'][:50]}...")
                     return chosen_post, narration
                 else:
-                    print("Gemini considera que cap d'aquestes 5 és prou bona. Provant el següent bloc...")
+                    print("Gemini ha rebutjat el bloc actual per manca de ganxo. Passant al següent...")
             except Exception as e:
-                print(f"Error interpretant resposta JSON: {e}")
+                print(f"Error interpretant el veredicte: {e}")
 
-    print("Seleccionant la història més votada per defecte.")
+    print("Seleccionant la història més valorada com a solució de seguretat.")
     best = max(posts, key=lambda x: x.get("ups", 0), default=posts[0])
     return best, f"{best['title']}. {best['body'][:500]}"
 
@@ -203,7 +203,7 @@ def select_story_with_gemini(posts, api_key):
 # -------------------------------------------------------------
 def create_reddit_card_image(post, output_image="reddit_card.png"):
     """
-    Crea una imatge de 1080x960 estilitzada com la interfície oficial de Reddit en mode fosc.
+    Genera la targeta gràfica (1080x960) en mode fosc amb l'estètica oficial de Reddit.
     """
     width, height = 1080, 960
     img = Image.new("RGB", (width, height), color="#0e1113")
@@ -221,7 +221,7 @@ def create_reddit_card_image(post, output_image="reddit_card.png"):
     title_font = ImageFont.truetype(font_bold, 44)
     body_font = ImageFont.truetype(font_reg, 34)
     
-    # Capçalera (Icona taronja + Subreddit + Autor)
+    # Capçalera
     draw.ellipse([card_margin_x + 40, card_margin_y + 40, card_margin_x + 95, card_margin_y + 95], fill="#ff4500")
     draw.text((card_margin_x + 115, card_margin_y + 48), f"r/{post['subreddit']}", font=meta_font, fill="#d7dadc")
     draw.text((card_margin_x + 380, card_margin_y + 48), f"• u/{post['author']}", font=meta_font, fill="#818384")
@@ -235,13 +235,13 @@ def create_reddit_card_image(post, output_image="reddit_card.png"):
         
     cur_y += 20
     
-    # Cos del text
+    # Cos
     wrapped_body = textwrap.wrap(post["body"][:400], width=45)
     for line in wrapped_body[:7]:
         draw.text((card_margin_x + 40, cur_y), line, font=body_font, fill="#d7dadc")
         cur_y += 44
         
-    # Peu amb puntuació
+    # Recompte de vots
     ups = post.get("ups", 1200)
     ups_k = f"{ups / 1000:.1f}k" if ups > 1000 else str(ups)
     footer_y = card_margin_y + card_h - 75
@@ -249,7 +249,7 @@ def create_reddit_card_image(post, output_image="reddit_card.png"):
     draw.text((card_margin_x + 60, footer_y + 10), f"▲  {ups_k}  ▼", font=meta_font, fill="#d7dadc")
     
     img.save(output_image)
-    print("Targeta gràfica de Reddit generada correctament.")
+    print("Targeta gràfica generada amb èxit.")
 
 # -------------------------------------------------------------
 # 4. GENERACIÓ D'ÀUDIO I SUBTÍTOLS (EDGE-TTS)
@@ -294,7 +294,7 @@ async def generate_audio_and_timestamps(text, output_audio="audio.mp3"):
 # -------------------------------------------------------------
 def ensure_background_video(gameplay_path="gameplay.mp4"):
     if not (os.path.exists(gameplay_path) and os.path.getsize(gameplay_path) > 1024 * 1024):
-        print("Descarregant vídeo de fons per defecte...")
+        print("Descarregant vídeo de gameplay per defecte...")
         url = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
         r = requests.get(url, stream=True)
         with open(gameplay_path, "wb") as f:
@@ -307,7 +307,7 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
     audio = AudioFileClip(audio_path)
     audio_duration = audio.duration
 
-    # 1. Pantalla Superior (Targeta Reddit 1080x960)
+    # 1. Pantalla Superior (Targeta 1080x960)
     top_card = (
         ImageClip(card_img)
         .with_duration(audio_duration)
@@ -329,7 +329,7 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
         .with_position((0, 960))
     )
 
-    # 3. Subtítols centrats a la part inferior (y=1400)
+    # 3. Subtítols centrats sobre el gameplay (y=1400)
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     subtitle_clips = []
     
@@ -349,7 +349,7 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
         )
         subtitle_clips.append(txt)
 
-    # Composició completa 1080x1920
+    # Composició completa 9:16
     final_video = CompositeVideoClip(
         clips=[top_card, bottom_gameplay] + subtitle_clips,
         size=(1080, 1920)
@@ -364,7 +364,7 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
         preset="ultrafast",
         threads=2
     )
-    print("Procés finalitzat amb èxit!")
+    print("Vídeo generat correctament!")
 
 # -------------------------------------------------------------
 # EXECUCIÓ PRINCIPAL
@@ -372,7 +372,7 @@ def build_split_screen_video(words, card_img="reddit_card.png", gameplay_path="g
 if __name__ == "__main__":
     gemini_key = os.getenv("GEMINI_API_KEY", "")
     
-    print("Recollint publicacions candidates de Reddit...")
+    print("Iniciant extracció de contingut...")
     posts = fetch_candidate_posts(gemini_key, total_needed=15)
     
     chosen_post, narration_text = select_story_with_gemini(posts, gemini_key)
